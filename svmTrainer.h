@@ -52,6 +52,6 @@ public:
 
 	void predict_RTrees(cv::Mat& query, std::pair<int, double> & result);
 
-	void predict(classifier classifier_, cv::Mat& query, std::pair<int, double> & result);
+	void predict(classifier classifier_, cv::Mat& query, int& result);
 };
 

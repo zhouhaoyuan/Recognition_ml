@@ -1,8 +1,10 @@
 #pragma once
-
+#include <limits>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <set>
+#include <map>
 #include <cstdio>
 #include <math.h>
 #include <stdlib.h>
@@ -17,12 +19,15 @@
 #include <pcl/point_cloud.h>
 #include <pcl/io/ply_io.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/common/angles.h>
+#include <pcl/common/transforms.h>
 
 #include <pcl/common/common.h>
 #include <pcl/common/angles.h>
 #include <pcl/common/transforms.h>
 //kdTree
 #include <pcl/search/kdtree.h>
+#include <pcl/kdtree/flann.h>
 //filters
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
@@ -36,6 +41,7 @@
 #include <pcl/keypoints/sift_keypoint.h>
 #include <pcl/keypoints/harris_3d.h>
 //feature
+#include <pcl/features/range_image_border_extractor.h>
 #include <pcl/features/normal_3d_omp.h>
 #include <pcl/features/fpfh_omp.h>
 #include <pcl/features/shot_omp.h>
@@ -45,9 +51,12 @@
 #include <pcl/features/pfh_tools.h>
 #include <pcl/features/our_cvfh.h>
 #include  <pcl/features/esf.h>
+#include <pcl/features/ppf.h>
+#include <pcl/features/ppfrgb.h>
 
 //segmentation
 #include <pcl/sample_consensus/ransac.h>
+#include <pcl/sample_consensus/sac_model_perpendicular_plane.h>
 #include <pcl/sample_consensus/method_types.h>
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
@@ -58,18 +67,40 @@
 
 #include <pcl/features/moment_of_inertia_estimation.h>
 
+// registration
+#include <pcl/registration/correspondence_estimation.h>
+#include <pcl/registration/correspondence_estimation_normal_shooting.h>
+#include <pcl/registration/correspondence_rejection_sample_consensus.h>//随机采样一致性去除
+#include <pcl/registration/correspondence_rejection_features.h>//特征的错误对应关系去除
+#include <pcl/registration/correspondence_rejection_one_to_one.h>
+#include <pcl/registration/correspondence_rejection_surface_normal.h>
+
+#include <pcl/registration/sample_consensus_prerejective.h>
+#include <pcl/registration/registration.h>
+#include <pcl/registration/ia_ransac.h>
+#include <pcl/registration/icp.h>
+#include <pcl/registration/warp_point_rigid_3d.h>
+#include <pcl/registration/icp_nl.h>
+#include <pcl/registration/transformation_estimation_lm.h>
+#include <pcl/registration/transformation_estimation_svd.h>
+#include <pcl/surface/mls.h> // 滑动最小二乘
 
 //visualizer
 #include <pcl/visualization/pcl_visualizer.h>
-//#include "vtkAutoInit.h" 
-//VTK_MODULE_INIT(vtkRenderingOpenGL);
+#include <pcl/visualization/histogram_visualizer.h>
+#include <pcl/visualization/pcl_plotter.h>
 
 typedef pcl::PointXYZ PointT;
 typedef pcl::Normal NormalT;
 typedef pcl::PointNormal PointNormalT;
+
 typedef pcl::PointCloud<PointT> PointCloud;
 typedef pcl::PointCloud<NormalT> Normals;
 typedef pcl::PointCloud<PointNormalT> PointCloudNormal;
+
+
+typedef pcl::FPFHSignature33 FPFH33_feature;
+typedef pcl::PointCloud<pcl::FPFHSignature33> FPFH_features;
 
 class FeatureCloud
 {

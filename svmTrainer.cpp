@@ -177,7 +177,7 @@ void svmTrainer::loadSVM(classifier classifier_, std::string fileName)
 	}
 
 }
-
+//这有待研究怎么用
 float svmTrainer::getConfidence(float distance)
 {
 	float conf = 1.0 / (1.0 + exp(-1 * distance));
@@ -188,7 +188,7 @@ void svmTrainer::validateSVM(cv::Ptr<cv::ml::StatModel> classifier, cv::Mat& _te
 {
 	float hits = 0;
 	float miss = 0;
-	for (size_t idx = 0; idx<_testData.rows; idx++) 
+	for (size_t idx = 0; idx < _testData.rows; idx++) 
 	{
 		std::cout << " [test] " << "idx:" << idx 
 			<< " predicted " << classifier->predict(_testData.row(idx)) 
@@ -212,26 +212,23 @@ void svmTrainer::predict_RTrees(cv::Mat& query, std::pair<int, double> & result)
 	result.first = forest->predict(query);
 	result.second = getConfidence(forest->predict(query));
 }
-void svmTrainer::predict(classifier classifier_, cv::Mat& query, std::pair<int, double> & result)
+void svmTrainer::predict(classifier classifier_, cv::Mat& query, int& result)
 {
 	switch (classifier_) 
 	{
 	case classifier::SVM:
 	{
-		result.first = svm->predict(query);
-		result.second = getConfidence(svm->predict(query));
+		result = (int)svm->predict(query);
 	}
 	break;
 	case classifier::RTrees:
 	{
-		result.first = forest->predict(query);
-		result.second = getConfidence(forest->predict(query));
+		result = (int)forest->predict(query);
 	}
 	break;
 	case classifier::KNN:
 	{
-		result.first = knn->predict(query);
-		result.second = getConfidence(knn->predict(query));
+		result = (int)knn->predict(query);
 	}
 	break;
 	}

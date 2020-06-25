@@ -36,7 +36,47 @@ void pointProcess::remove_Centroid(PointCloud::Ptr pointInput, Eigen::Vector3f& 
 		pointInput->points[i].z -= mean(2);
 	}
 }
+void pointProcess::normalizePoints(PointCloud::Ptr pointCloud, Eigen::Vector3f& mean,
+	float global_scale)
+{
+	int npti = pointCloud->points.size();
+	if (mean[0] == 0 && mean[1] == 0 && mean[2] == 0)
+	{
+		for (int i = 0; i < npti; ++i)
+		{
+			Eigen::Vector3f p = pointCloud->points[i].getVector3fMap();
+			mean = mean + p;
+		}
+		mean = mean / npti;
 
+		for (int i = 0; i < npti; ++i)
+		{
+			pointCloud->points[i].x -= mean(0);
+			pointCloud->points[i].y -= mean(1);
+			pointCloud->points[i].z -= mean(2);
+		}
+	}
+
+	float max_scale = 0;
+	for (int i = 0; i < npti; ++i)
+	{
+		Eigen::Vector3f p(pointCloud->points[i].x,
+			pointCloud->points[i].y,
+			pointCloud->points[i].z);
+		float temp = p.norm();//点积开方
+		if (temp > max_scale)
+			max_scale = temp;//获取距离质心点最大距离
+	}
+	if (max_scale > global_scale)
+		global_scale = max_scale;
+	//将所有点归一化
+	for (int i = 0; i < npti; ++i)
+	{
+		pointCloud->points[i].x /= global_scale;
+		pointCloud->points[i].y /= global_scale;
+		pointCloud->points[i].z /= global_scale;
+	}
+}
 float pointProcess::computeResolution(PointCloud::Ptr pInput)
 {
 	if (pInput->points.empty())
@@ -241,6 +281,83 @@ void pointProcess::Bilateral_Filter(
 		<< "; Output points: " << output->size() << " ; " << (end - start) / CLOCKS_PER_SEC << " s \n";
 }
 
+PointCloudNormal pointProcess::MLSreSampling(pcl::PointCloud<PointT>::Ptr inputP)
+{
+	clock_t start, end;
+	start = clock();
+
+	float resolution = computeResolution(inputP);
+	pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+	PointCloudNormal mls_outputP;
+
+	pcl::MovingLeastSquaresOMP<PointT, PointNormalT> mls(4);
+	mls.setComputeNormals(true);
+	mls.setInputCloud(inputP);
+	// MLS拟合曲线的阶数，这个阶数在构造函数里默认是2，
+	// 但是参考文献给出最好选择3或者4，当然不难得出随着阶数的增加程序运行的时间也增加。
+	mls.setPolynomialOrder(3);
+	mls.setSearchMethod(tree); // 使用kdtree加速搜索
+	mls.setSearchRadius(resolution * 3); // 确定搜索的半径，半径越小拟合后曲面失真度越小
+	//mls.setSqrGaussParam(resolution * 3 * resolution * 3);//设置基于距离的邻域点加权参数，默认为搜索半径的平方，也是最好了。
+	// 上采样
+	//mls.setUpsamplingMethod(mls.NONE); // 上采样 增加较小区域的密度，对填补洞无能为力
+	//mls.setUpsamplingMethod(SAMPLE_LOCAL_PLANE);
+	// 需要设置半径和步数
+	//mls.setUpsamplingRadius();// 此函数规定了点云增长的区域。可以这样理解：把整个点云按照此半径划分成若干个子点云，然后一一索引进行点云增长。
+	// mls.setUpsamlingStepSize(double size); //对于每个子点云处理时迭代的步长
+
+	//mls.setUpsamplingMethod(RANDOM_UNIFORM_DENSITY);// 它使得稀疏区域的密度增加，从而使得整个点云的密度均匀
+	// 需要设置密度
+	//mls.setPointDensity(int desired_num);//意为半径内点的个数。
+
+	//mls.setUpsamplingMethod(VOXEL_GRID_DILATION);// 体素格　上采样
+	// 填充空洞和平均化点云的密度。它需要调用的函数为：
+	//mls.setDilationVoxelSize(float voxel_size);// 设定voxel的大小。
+
+	// 重采样
+	mls.process(mls_outputP);
+
+	end = clock();
+	int num = inputP->points.size();
+	std::cout << "MLSreSampling(), Input points: " << num
+		<< "; Output points: " << mls_outputP.size() << " ; " << (end - start) / CLOCKS_PER_SEC << " s \n";
+
+	// return output
+	return mls_outputP;
+}
+
+void pointProcess::computeNormals(
+	PointCloud::Ptr input,
+	Normals::Ptr output,
+	int K ,
+	float radius ,
+	int numofthreads)
+{
+	clock_t start, end;
+	start = clock();
+
+	pcl::NormalEstimationOMP<PointT, NormalT> norm_est;
+	pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>());
+
+	norm_est.setNumberOfThreads(numofthreads);
+	norm_est.setSearchMethod(tree);
+	if (radius != 0) {
+
+		norm_est.setRadiusSearch(radius);
+	}
+	else {
+		norm_est.setKSearch(K);
+	}
+	norm_est.setInputCloud(input);
+	norm_est.compute(*output);
+	std::vector<int> index;
+	pcl::removeNaNNormalsFromPointCloud(*output, *output, index);
+	pcl::copyPointCloud(*input, index, *input);
+	end = clock();
+	std::cout << "computeNormals() has finished in "
+		<< (end - start) / CLOCKS_PER_SEC << " s \n";
+}
+
 void pointProcess::computeSurfaceNormals(
 	FeatureCloud& cloud,
 	int K,
@@ -265,9 +382,10 @@ void pointProcess::computeSurfaceNormals(
 	}
 	norm_est.setInputCloud(cloud.getPointCloud());
 	norm_est.compute(*normals_);
+	std::vector<int> index;
+	pcl::removeNaNNormalsFromPointCloud(*normals_, *normals_, index);
 	cloud.setNormals(normals_);
-	removeNANfromNormal(cloud);
-
+	pcl::copyPointCloud(*cloud.getPointCloud(), index, *cloud.getPointCloud());
 	end = clock();
 	std::cout << "computeSurfaceNormals() has finished in "
 		<< (end - start) / CLOCKS_PER_SEC << " s \n";
@@ -785,7 +903,7 @@ void pointProcess::computeFeatures_OUR_CVFH(FeatureCloud &cloud)
 	start = clock();
 
 	float resolution = pointProcess::computeResolution(cloud.getKeypoints());
-	//求曲率阈值，选中间值
+	//求曲率阈值，选0.5*最大值
 	std::vector<int> indices_out;
 	std::vector<int> indices_in;
 	float curvatureThreshold = 0.0;
@@ -836,6 +954,15 @@ void pointProcess::computeFeatures_ESF(FeatureCloud &cloud)
 	end = clock();
 	std::cout << "esf size : " << esfPtr->points.size() << " , computeFeatures_ESF() has finished in "
 		<< (end - start) / CLOCKS_PER_SEC << " s \n";
+}
+//ppf特征描述子
+void computeFeatures_PPf(FeatureCloud &cloud)
+{
+	clock_t start, end;
+
+	start = clock();
+
+
 }
 //FPFH去除NAN点
 void pointProcess::removeNANfromFPFH(
@@ -948,20 +1075,39 @@ void pointProcess::extractIndicesPoints(PointCloud::Ptr pointInput,
 	pcl::ExtractIndices<PointT> extract;
 	extract.setInputCloud(pointInput);
 	extract.setIndices(inliers);
-	//true 为提取索引， false 为剔除索引
+	//true 为剔除索引， false 为提取索引
 	extract.setNegative(extractNegative);
 	extract.filter(*pointOutput);
-	if (!extractNegative)
+	if (extractNegative)
 		std::cout << "Extract the rest-component: "
 		<< pointOutput->points.size() << std::endl;
 	else
 		std::cout << "Extract the indice-component: "
 		<< pointOutput->points.size() << std::endl;
-
+}
+//提取或去除索引的法线
+void pointProcess::extractIndicesNormals(Normals::Ptr pointInput,
+	Normals::Ptr pointOutput,
+	pcl::PointIndices::Ptr inliers,
+	bool extractNegative)
+{
+	pcl::ExtractIndices<NormalT> extract;
+	extract.setInputCloud(pointInput);
+	extract.setIndices(inliers);
+	//true 为剔除索引， false 为提取索引
+	extract.setNegative(extractNegative);
+	extract.filter(*pointOutput);
+	if (extractNegative)
+		std::cout << "Extract the rest-component: "
+		<< pointOutput->points.size() << std::endl;
+	else
+		std::cout << "Extract the indice-component: "
+		<< pointOutput->points.size() << std::endl;
 }
 //基于欧氏距离的聚类
 void pointProcess::EuclideanClusterExtraction(PointCloud::Ptr pointInput,
 	std::vector<PointCloud::Ptr>& cloudListOutput,
+	std::vector<pcl::PointIndices>& indices,
 	float clusterTolerance ,
 	int minClusterSize ,
 	int maxClusterSize )
@@ -975,7 +1121,6 @@ void pointProcess::EuclideanClusterExtraction(PointCloud::Ptr pointInput,
 	clock_t start, end;
 	start = clock();
 	pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>());
-	std::vector<pcl::PointIndices> cluster_indices;
 
 	pcl::EuclideanClusterExtraction<PointT> ec;
 	ec.setInputCloud(pointInput);
@@ -983,11 +1128,11 @@ void pointProcess::EuclideanClusterExtraction(PointCloud::Ptr pointInput,
 	ec.setClusterTolerance(clusterTolerance);
 	ec.setMinClusterSize(minClusterSize);
 	ec.setMaxClusterSize(maxClusterSize);
-	ec.extract(cluster_indices);
+	ec.extract(indices);
 
 	int num = 1;
-	std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin();
-	for (; it != cluster_indices.end(); ++it)
+	std::vector<pcl::PointIndices>::const_iterator it = indices.begin();
+	for (; it != indices.end(); ++it)
 	{
 		PointCloud::Ptr cloud_cluster(new PointCloud());
 		pcl::copyPointCloud(*pointInput, *it, *cloud_cluster);
@@ -1002,8 +1147,10 @@ void pointProcess::EuclideanClusterExtraction(PointCloud::Ptr pointInput,
 		<< (float)(end - start) / CLOCKS_PER_SEC << " s " << std::endl;
 }
 //基于区域生长的聚类
-void pointProcess::RegionGrowingClusterExtraction(PointCloud::Ptr pointInput,
+void pointProcess::RegionGrowingClusterExtraction(
+	PointCloud::Ptr pointInput,
 	std::vector<PointCloud::Ptr>& cloudListOutput,
+	std::vector<pcl::PointIndices>& indices,
 	Normals::Ptr normalInput,
 	int minClusterSize,
 	int maxClusterSize,
@@ -1023,12 +1170,11 @@ void pointProcess::RegionGrowingClusterExtraction(PointCloud::Ptr pointInput,
 	reg.setInputNormals(normalInput);
 	reg.setSmoothnessThreshold(smoothThreshold);
 
-	std::vector<pcl::PointIndices> cluster_indices;
-	reg.extract(cluster_indices);
-	std::cout << "Number of clusters is equal to " << cluster_indices.size() << std::endl;
+	reg.extract(indices);
+	std::cout << "Number of clusters is equal to " << indices.size() << std::endl;
 
 	int j = 1;
-	for (std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin(); it != cluster_indices.end(); ++it)
+	for (std::vector<pcl::PointIndices>::const_iterator it = indices.begin(); it != indices.end(); ++it)
 	{
 		PointCloud::Ptr cloud_cluster(new PointCloud);
 		for (std::vector<int>::const_iterator pit = it->indices.begin(); pit != it->indices.end(); ++pit)
@@ -1248,4 +1394,372 @@ void pointProcess::OrientedBoundingBox(PointCloud::Ptr pointInput,
 	pcZ.x = scalar * eigenVectorsPCA(0, 2) + initialoriginalPoint.x;
 	pcZ.y = scalar * eigenVectorsPCA(1, 2) + initialoriginalPoint.y;
 	pcZ.z = scalar * eigenVectorsPCA(2, 2) + initialoriginalPoint.z;
+}
+//kdTree搜索最近点(PointT)
+void pointProcess::getNearestIndices(const PointCloud::Ptr cloudIn,
+	const PointCloud::Ptr cloudQuery,
+	PointCloud::Ptr cloudResult,
+	pcl::PointIndices::Ptr indicesPtr)
+{
+	pcl::search::KdTree<PointT> kdtree;
+	kdtree.setInputCloud(cloudIn);
+	std::vector<float> pointNKNSquareDistance(1);
+	std::vector<int> pointIdxNKNSearch(1);
+	int indice = 0;
+	for (size_t i = 0; i < cloudQuery->size(); ++i)
+	{
+		int num = kdtree.nearestKSearch(cloudQuery->points[i], 1, pointIdxNKNSearch, pointNKNSquareDistance);
+		if (num == 1) {
+
+			indice = pointIdxNKNSearch[0];
+			indicesPtr->indices.push_back(indice);
+			cloudResult->points.push_back(cloudIn->points[indice]);
+		}
+	}
+}
+//对应点对估计
+void pointProcess::correspondence_estimation(
+	FPFH_features::Ptr source_cloud,
+	FPFH_features::Ptr target_cloud,
+	pcl::Correspondences &all_corres)
+{
+	pcl::registration::CorrespondenceEstimation<FPFH33_feature, FPFH33_feature> est;
+	est.setInputSource(source_cloud);
+	est.setInputTarget(target_cloud);
+	est.determineReciprocalCorrespondences(all_corres);
+}
+//对应点对剔除
+void pointProcess::correspondences_rejection(
+	const PointCloud::Ptr source_cloud,
+	const PointCloud::Ptr target_cloud,
+	pcl::Correspondences &correspondences,
+	pcl::Correspondences &inliers,
+	int MaximumIterations, float Inlierthreshold)
+{
+	pcl::registration::CorrespondenceRejectorSampleConsensus<PointT> sac;
+	sac.setInputSource(source_cloud);
+	sac.setInputTarget(target_cloud);
+
+	// Set the threshold for rejection iteration
+	sac.setInlierThreshold(Inlierthreshold);
+	sac.setMaximumIterations(MaximumIterations);
+	sac.getRemainingCorrespondences(correspondences, inliers);
+}
+//对应点对剔除（ 自定义约束）
+void pointProcess::advancedMatching(PointCloud::Ptr target, PointCloud::Ptr source,
+	pcl::Correspondences &correspondences,
+	pcl::Correspondences &inliers,
+	float tupleScale,
+	int tuple_max_cnt_)
+{
+	clock_t start, end;
+	start = clock();
+	srand(time(NULL));
+	printf("[tuple constraint] ");
+
+	int rand0, rand1, rand2;
+	int idi0, idi1, idi2;
+	int idj0, idj1, idj2;
+	float scale = tupleScale;
+	int ncorr = correspondences.size();
+	int number_of_trial = ncorr * 100;
+
+	pcl::Correspondence corr0;
+	pcl::Correspondence corr1;
+	pcl::Correspondence corr2;
+
+	int cnt = 0;
+	int i = 0;
+	for (i = 0; i < number_of_trial; ++i)
+	{
+		rand0 = rand() % ncorr;
+		rand1 = rand() % ncorr;
+		rand2 = rand() % ncorr;
+
+		idi0 = correspondences[rand0].index_match;
+		idj0 = correspondences[rand0].index_query;
+		corr0.index_match = idi0;
+		corr0.index_query = idj0;
+		corr0.distance = correspondences[rand0].distance;
+
+		idi1 = correspondences[rand1].index_match;
+		idj1 = correspondences[rand1].index_query;
+		corr1.index_match = idi1;
+		corr1.index_query = idj1;
+		corr1.distance = correspondences[rand1].distance;
+
+		idi2 = correspondences[rand2].index_match;
+		idj2 = correspondences[rand2].index_query;
+		corr2.index_match = idi2;
+		corr2.index_query = idj2;
+		corr2.distance = correspondences[rand2].distance;
+
+		// collect 3 points from i-th fragment
+		Eigen::Vector3f pti0 = target->points[idi0].getVector3fMap();
+		Eigen::Vector3f pti1 = target->points[idi1].getVector3fMap();
+		Eigen::Vector3f pti2 = target->points[idi2].getVector3fMap();
+
+		float li0 = (pti0 - pti1).norm();
+		float li1 = (pti1 - pti2).norm();
+		float li2 = (pti2 - pti0).norm();
+
+		// collect 3 points from j-th fragment
+		Eigen::Vector3f ptj0 = source->points[idj0].getVector3fMap();
+		Eigen::Vector3f ptj1 = source->points[idj1].getVector3fMap();
+		Eigen::Vector3f ptj2 = source->points[idj2].getVector3fMap();
+
+		float lj0 = (ptj0 - ptj1).norm();
+		float lj1 = (ptj1 - ptj2).norm();
+		float lj2 = (ptj2 - ptj0).norm();
+
+		if ((li0 * scale < lj0) && (lj0 < li0 / scale) &&
+			(li1 * scale < lj1) && (lj1 < li1 / scale) &&
+			(li2 * scale < lj2) && (lj2 < li2 / scale))
+		{
+			inliers.push_back(corr0);
+			inliers.push_back(corr1);
+			inliers.push_back(corr2);
+			cnt++;
+		}
+
+		if (cnt >= tuple_max_cnt_)
+			break;
+	}
+	end = clock();
+	std::cout << "advancedMatching ---Tuple computation time : "
+		<< float(end - start) / CLOCKS_PER_SEC << "s" << std::endl;
+}
+//SAC-IA
+void pointProcess::SAC_IA_Transform(FeatureCloud &source_cloud,
+	FeatureCloud &target_cloud,
+	float minsampleDistance,
+	int numofSample,
+	int correspondenceRandomness,
+	Eigen::Matrix4f& final_transformation)
+{
+	std::cout << "--------------- SAC-IA ------------------" << std::endl;
+	clock_t start;
+	clock_t end;
+	start = clock();
+	//SAC配准
+	pcl::SampleConsensusInitialAlignment<PointT, PointT, FPFH33_feature> scia;
+	scia.setInputSource(source_cloud.getKeypoints());
+	scia.setInputTarget(target_cloud.getKeypoints());
+	scia.setSourceFeatures(source_cloud.getFPFH_features());
+	scia.setTargetFeatures(target_cloud.getFPFH_features());
+
+	//scia.setMaxCorrespondenceDistance();
+	scia.setMinSampleDistance(minsampleDistance);
+	scia.setNumberOfSamples(numofSample);//设置每次迭代计算中使用的样本数量（可省）,可节省时间
+	scia.setCorrespondenceRandomness(correspondenceRandomness);//设置计算协方差时选择多少近邻点，该值越大，
+															   //协方差越精确，但是计算效率越低.(可省)
+
+	PointCloud::Ptr result(new PointCloud);
+	scia.align(*result, final_transformation);
+	end = clock();
+	std::cout << "calculate time is: " << float(end - start) / CLOCKS_PER_SEC << "s" << endl;
+	std::cout << "SAC has converged:" << scia.hasConverged() << "  score: " << scia.getFitnessScore() << endl;
+	std::cout << std::endl << scia.getFinalTransformation() << std::endl;
+	final_transformation = scia.getFinalTransformation();
+}
+
+//ICP
+float pointProcess::iterative_closest_points(std::string solver,
+	bool flag_reciprocal, bool flag_ransac,
+	FeatureCloud &source_cloud, FeatureCloud &target_cloud,
+	float transEps, float corresDist, float EuclFitEps,
+	float outlThresh, int maxIteration,
+	Eigen::Matrix4f &final_transformation)
+{
+	std::cout << "----------------- ICP -----------" << std::endl;
+	PointCloudNormal Final;
+
+	PointCloudNormal::Ptr pointNormal_src = source_cloud.getPointCloudNormal();
+	PointCloudNormal::Ptr pointNormal_tgt = target_cloud.getPointCloudNormal();
+
+	pcl::registration::CorrespondenceRejector::Ptr ransac_rej \
+		(new pcl::registration::CorrespondenceRejectorSampleConsensus<PointNormalT>());
+
+	if (solver == "SVD")
+	{
+		std::cout << "SVD Solver for ICP Is Running!" << std::endl;
+		pcl::IterativeClosestPoint < PointNormalT, PointNormalT > icp;
+
+		if (flag_reciprocal == true)
+			icp.setUseReciprocalCorrespondences(true);
+		if (flag_ransac == true)
+		{
+			icp.setRANSACOutlierRejectionThreshold(outlThresh);
+			// add ransac rejector
+			icp.addCorrespondenceRejector(ransac_rej);
+		}
+
+		icp.setInputSource(pointNormal_src);
+		icp.setInputTarget(pointNormal_tgt);
+
+		icp.setMaximumIterations(maxIteration);
+		icp.setTransformationEpsilon(transEps);
+		//icp.setMaxCorrespondenceDistance(corresDist);
+		//icp.setEuclideanFitnessEpsilon(EuclFitEps);
+		icp.setRANSACOutlierRejectionThreshold(outlThresh);
+
+		icp.align(Final, final_transformation);
+
+		final_transformation = icp.getFinalTransformation();
+		std::cout << "SVD Solver for ICP, FitnessScore: " << icp.getFitnessScore() << std::endl;
+		std::cout << std::endl << final_transformation << std::endl;
+
+		return icp.getFitnessScore();
+	}
+	if (solver == "LM")
+	{
+		std::cout << "LM Solver for ICP Is Running!" << std::endl;
+		pcl::IterativeClosestPointNonLinear<PointNormalT, PointNormalT> icp_lm;
+
+		if (flag_reciprocal == true)
+			icp_lm.setUseReciprocalCorrespondences(true);
+		if (flag_ransac == true)
+		{
+			icp_lm.setRANSACOutlierRejectionThreshold(outlThresh);
+			// add ransac rejector
+			icp_lm.addCorrespondenceRejector(ransac_rej);
+		}
+
+		icp_lm.setInputSource(pointNormal_src);
+		icp_lm.setInputTarget(pointNormal_tgt);
+
+		icp_lm.setMaximumIterations(maxIteration);
+		icp_lm.setTransformationEpsilon(transEps);
+		//icp_lm.setMaxCorrespondenceDistance(corresDist);
+		//icp_lm.setEuclideanFitnessEpsilon(EuclFitEps);
+
+		icp_lm.align(Final, final_transformation);
+
+		final_transformation = icp_lm.getFinalTransformation();
+		std::cout << "LM Solver for ICP , FitnessScore: " << icp_lm.getFitnessScore() << std::endl;
+		std::cout << std::endl << final_transformation << std::endl;
+
+		return icp_lm.getFitnessScore();
+	}
+}	
+//ICP
+float pointProcess::ICP_pointclouds(
+	PointCloud::Ptr cloudTarget,
+	PointCloud::Ptr cloudSource,
+	Eigen::Matrix4f& tranRes)
+{
+	//pointProcess::StatisticalOutlierRemoval_Filter(cloudTarget, cloudTarget, 30);
+	//pointProcess::StatisticalOutlierRemoval_Filter(cloudSource, cloudSource, 30);
+	FeatureCloud targetFC, sourceFC;
+	targetFC.setPointCloud(cloudTarget);
+	sourceFC.setPointCloud(cloudSource);
+	//更新分辨率
+	float resolution = pointProcess::computeResolution(cloudTarget);
+	//Normal Calculation
+	int normal_K = 30;
+	float normal_R = resolution * 3;
+	pointProcess::computeSurfaceNormals(targetFC, normal_K, normal_R);
+	pointProcess::computeSurfaceNormals(sourceFC, normal_K, normal_R);
+
+	targetFC.setKeypoints(targetFC.getPointCloud());
+	sourceFC.setKeypoints(sourceFC.getPointCloud());
+	targetFC.setKeypointNormals(targetFC.getNormals());
+	sourceFC.setKeypointNormals(sourceFC.getNormals());
+
+	pointProcess::construct_PointNormal(targetFC, sourceFC);
+
+	float transEps = 1e-7;//设置两次变化矩阵之间的差值（一般设置为1e-10即可）
+	float maxCorresDist = 0.7;//设置对应点对之间的最大距离（此值对配准结果影响较大）,没有用上
+	float EuclFitEps = 0.0001;//设置收敛条件是均方误差和小于阈值,停止迭代；,没有用上
+	float outlThresh = resolution * 1.5;
+	int maxIteration = 60;
+	float scoreICP = pointProcess::iterative_closest_points("SVD", false, false,
+		sourceFC, targetFC,
+		transEps, maxCorresDist, EuclFitEps,
+		outlThresh, maxIteration, tranRes);
+
+	return scoreICP;
+
+}
+//显示点云对应点对
+void pointProcess::showPointCloudCorrespondences(std::string viewerName,
+	PointCloud::Ptr cloudTarget_,
+	PointCloud::Ptr cloudSource_,
+	pcl::Correspondences &corr_, int showThreshold)
+{
+	pcl::visualization::PCLVisualizer viewer(viewerName);
+	viewer.setBackgroundColor(255, 255, 255);
+	//viewer.initCameraParameters();
+
+	PointCloud::Ptr temp_target(new PointCloud());
+	pcl::copyPointCloud(*cloudTarget_, *temp_target);
+
+	//  We are translating the model so that it doesn't end in the middle of the scene representation
+	Eigen::Matrix4f tran = Eigen::Matrix4f::Identity();
+	tran(1, 3) = 0.4;
+	pcl::transformPointCloud(*temp_target, *temp_target, tran);
+
+	pcl::visualization::PointCloudColorHandlerCustom<PointT> color(temp_target, 0, 255, 0);
+	viewer.addPointCloud(temp_target, color, "Target");
+	viewer.addPointCloud(cloudSource_, color, "Source");
+
+	for (size_t i = 0; i < corr_.size(); ++i)
+	{
+		if (i % showThreshold == 0)
+		{
+			PointT source = cloudSource_->at(corr_[i].index_query);
+			PointT target = temp_target->at(corr_[i].index_match);
+			char name[80] = "correspondece_line";
+			sprintf(name, "_%d", i);
+			viewer.addLine<PointT, PointT>(target, source, 0, 0, 255, name);
+		}
+	}
+
+	while (!viewer.wasStopped())
+	{
+		viewer.spinOnce(10);
+	}
+}
+
+//构建法向量点云
+void pointProcess::construct_PointNormal(FeatureCloud& targetCloud,
+	FeatureCloud& sourceCloud)
+{
+	PointCloudNormal::Ptr pointNormal_src(new PointCloudNormal);
+	PointCloudNormal::Ptr pointNormal_tgt(new PointCloudNormal);
+
+	PointCloud::Ptr tgtCloud = targetCloud.getKeypoints();
+	PointCloud::Ptr srcCloud = sourceCloud.getKeypoints();
+	Normals::Ptr tgtNormal = targetCloud.getKeypointNormals();
+	Normals::Ptr srcNormal = sourceCloud.getKeypointNormals();
+
+	for (size_t i = 0; i < srcCloud->points.size(); ++i)
+	{
+		PointNormalT point_normal;
+		point_normal.x = srcCloud->points[i].x;
+		point_normal.y = srcCloud->points[i].y;
+		point_normal.z = srcCloud->points[i].z;
+
+		point_normal.normal_x = srcNormal->points[i].normal_x;
+		point_normal.normal_y = srcNormal->points[i].normal_y;
+		point_normal.normal_z = srcNormal->points[i].normal_z;
+
+		pointNormal_src->push_back(point_normal);
+	}
+	sourceCloud.setPointCloudNormals(pointNormal_src);
+
+	for (size_t i = 0; i < tgtCloud->points.size(); ++i)
+	{
+		PointNormalT point_normal;
+		point_normal.x = tgtCloud->points[i].x;
+		point_normal.y = tgtCloud->points[i].y;
+		point_normal.z = tgtCloud->points[i].z;
+
+		point_normal.normal_x = tgtNormal->points[i].normal_x;
+		point_normal.normal_y = tgtNormal->points[i].normal_y;
+		point_normal.normal_z = tgtNormal->points[i].normal_z;
+
+		pointNormal_tgt->push_back(point_normal);
+	}
+	targetCloud.setPointCloudNormals(pointNormal_tgt);
 }

@@ -12,21 +12,37 @@ public:
 
 	enum class Axis{ x, y , z };
 
-	bool set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib);
+	static inline bool probcmp(std::pair<int, int> x, std::pair<int, int> y)
+	{
+		return x.second > y.second;
+	}
+
+	bool set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib, bool local = false);
 	
 	bool set_ObjectLibrary_label(std::vector<std::string>& fileNames);
+
+	bool set_svm_train_model();
+
+	void svm_classifier_train(std::string savefilename);
+
+	void load_svmClassifier(svmTrainer::classifier classifier_, std::string file);
+
+	int svm_predict(PointCloud::Ptr input);
+
+	//计算转换矩阵
+	float RotationTranslationCompute(
+		int targetIndex,
+		FeatureCloud& cloudsource,
+		Eigen::Matrix4f &tranResult);
 
 	//旋转创造数据集
 	static void rotateModelToDataSet(PointCloud::Ptr input, 
 		int angle, Axis axis,
 		std::vector<PointCloud::Ptr> outputList, std::string path,std::string filename);
-
 	//cvfh转化为cvMat
 	cv::Mat cvfh_to_cvMat(FeatureCloud& cloud);
-
 	//esf转化为cvMat
 	cv::Mat esf_to_cvMat(FeatureCloud& cloud);
-
 	//ourcvfh+esf 转化为cvMat
 	cv::Mat ourcvfh_and_esf_to_cvMat(FeatureCloud& cloud);
 
@@ -36,14 +52,6 @@ public:
 		return pair1.second < pair2.second;
 	}
 	
-	bool set_svm_train_model();
-
-	void svm_classifier_train(std::string savefilename);
-
-	int svm_predict(PointCloud::Ptr input);
-
-	void load_svmClassifier(svmTrainer::classifier classifier_, std::string file);
-
 private:
 	//模板库
 	std::vector< FeatureCloud > objectLibrary;

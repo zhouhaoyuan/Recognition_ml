@@ -11,7 +11,7 @@ recognition3D::~recognition3D()
 {
 }
 
-bool recognition3D::set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib)
+bool recognition3D::set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib, bool local)
 {
 	std::cout << "\n\n ----------- setup the objectLibrary ---------- \n\n";
 
@@ -43,9 +43,9 @@ bool recognition3D::set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib)
 		{
 			float leafSize = resolution * 4;
 			pointProcess::VoxelGrid_Filter(tempCloudPtr, tempCloudPtr, leafSize);
-		}
-		//更新分辨率
-		resolution = pointProcess::computeResolution(tempCloudPtr);
+			//更新分辨率
+			resolution = pointProcess::computeResolution(tempCloudPtr);
+		}	
 		//设置点云
 		tempObj.setPointCloud(tempCloudPtr);
 		//Normal Calculation
@@ -62,15 +62,24 @@ bool recognition3D::set_ObjectLibrary(std::vector< PointCloud::Ptr > &objectLib)
 
      	//Feature describe
 		resolution = pointProcess::computeResolution(tempObj.getKeypoints());
-		float FPFH_radius = resolution * 5;
-		float SHOT_radius = resolution * 5;
-		//pointProcesser.computeFeatures_FPFH(tempObj, FPFH_radius);
-		//pointProcesser.computeFeatures_SHOT(tempObj, SHOT_radius);
-	    //pointProcesser.computeFeatures_VFH(tempObj);
-		//pointProcesser.computeFeatures_CVFH(tempObj);
-		//pointProcesser.computeFeatures_ImprovedCVFH(tempObj);
-		pointProcesser.computeFeatures_OUR_CVFH(tempObj);
-		pointProcesser.computeFeatures_ESF(tempObj);
+
+		if (local)
+		{
+			float FPFH_radius = resolution * 4;
+			float SHOT_radius = resolution * 4;
+
+			pointProcesser.computeFeatures_FPFH(tempObj, FPFH_radius);
+			//pointProcesser.computeFeatures_SHOT(tempObj, SHOT_radius);
+		}
+		else
+		{
+			//pointProcesser.computeFeatures_VFH(tempObj);
+			//pointProcesser.computeFeatures_CVFH(tempObj);
+			//pointProcesser.computeFeatures_ImprovedCVFH(tempObj);
+			//pointProcesser.computeFeatures_OUR_CVFH(tempObj);
+			pointProcesser.computeFeatures_ESF(tempObj);
+		}
+	
 		objectLibrary.push_back(tempObj);
 	}
 	return true;
@@ -96,6 +105,7 @@ bool recognition3D::set_ObjectLibrary_label(std::vector<std::string>& fileNames)
 	}
 	return true;
 }
+
 
 //旋转创造数据集
 void recognition3D::rotateModelToDataSet(PointCloud::Ptr input,
@@ -464,52 +474,71 @@ int recognition3D::svm_predict(PointCloud::Ptr input)
 
 	//Feature describe
 	resolution = pointProcess::computeResolution(tmpInput.getKeypoints());
-	float FPFH_radius = resolution * 5;
-	float SHOT_radius = resolution * 5;
+	float FPFH_radius = resolution * 4;
+	float SHOT_radius = resolution * 4;
 	//pointProcesser.computeFeatures_FPFH(tmpInput, FPFH_radius);
 	//pointProcesser.computeFeatures_SHOT(tmpInput, SHOT_radius);
 	//pointProcesser.computeFeatures_VFH(tmpInput);
-	pointProcesser.computeFeatures_OUR_CVFH(tmpInput);
+	//pointProcesser.computeFeatures_OUR_CVFH(tmpInput);
 	//pointProcesser.computeFeatures_CVFH(tmpInput);
 	//pointProcesser.computeFeatures_ImprovedCVFH(tmpInput);
 	pointProcesser.computeFeatures_ESF(tmpInput);
+
+	//pcl::visualization::PCLPlotter* plotter = new pcl::visualization::PCLPlotter();
+	//plotter->setShowLegend(true);
+	//plotter->addFeatureHistogram<pcl::VFHSignature308>(*tmpInput.getCVFH_features(), "vfh", 0, "OUR-CVFH");
+	//plotter->setWindowSize(600, 400);
+	//plotter->spinOnce(10);
 	
 	//TODO:
 	int feature_size = tmpInput.getESF_features()->points.size();
-	int featureDimension = tmpInput.getESF_features()->points[0].descriptorSize();// +\
-		//+ tmpInput.getCVFH_features()->points[0].descriptorSize();
+	int featureDimension = tmpInput.getESF_features()->points[0].descriptorSize();
 
-	std::vector<std::pair<int, double>> results;
+	//int feature_size = tmpInput.getCVFH_features()->points.size();
+	//int featureDimension = tmpInput.getCVFH_features()->points[0].descriptorSize();
+
+	std::vector<int> results;
 	for (int i = 0; i < feature_size; ++i)
 	{
 		cv::Mat descriptor = cv::Mat::zeros(1, featureDimension, CV_32FC1);
 		float* ptr = descriptor.ptr < float >(0);
-		for (int j = 0; j < 640; ++j)
+		for (int j = 0; j < featureDimension; ++j)
 		{
 			//TODO:
+			//ptr[j] = tmpInput.getCVFH_features()->points[i].histogram[j];
 			ptr[j] = tmpInput.getESF_features()->points[i].histogram[j];
 		}
-		//for (int n = 640; n < featureDimension; ++n)
-		//{
-		//	//TODO:
-		//	ptr[n] = tmpInput.getCVFH_features()->points[i].histogram[n];
-		//}
 		//预测
-		std::pair<int, double> result;
+		int result;
 		//TODO:
 		svmTrainer_.predict(svmTrainer::classifier::SVM, descriptor, result);
 		results.push_back(result);
+		//std::cout << "result : "<< result << std::endl;
 	}
-	std::sort(results.begin(), results.end(), compareConfidence);
+	
+	std::map<int, int> myM;
+	for (int i = 0; i < results.size(); ++i)
+		++myM[results[i]];
+	std::vector<std::pair<int, int>> tmpM;
+	for (std::map<int, int>::iterator curr = myM.begin(); curr != myM.end(); ++curr)
+	{
+		tmpM.push_back(std::make_pair(curr->first, curr->second));
+		//std::cout << curr->first << "  ,  " << curr->second << std::endl;
+	}
 		
-	double time2 = (double)cv::getTickCount();
-	std::cout << "predict time : " << (time2 - time1) * 1000 / (cv::getTickFrequency()) <<" ms \n"<< std::endl;
+	std::sort(tmpM.begin(), tmpM.end(), probcmp);
 
-	//if (results[feature_size - 1].second > 0.6)
-	std::cout << "[predict result] : " << results[feature_size - 1].first<<" , confidence : " << results[feature_size - 1].second << std::endl << std::endl;
-		return results[feature_size - 1].first;
-	//else
-		//return -1;
+	if (tmpM.size() > 1 && tmpM[0].second == tmpM[1].second)
+	{
+		std::cout << "[predict failure] !!! " << std::endl;
+		return -1;
+	}
+	
+	double time2 = (double)cv::getTickCount();
+	std::cout << "[predict time] : " << (time2 - time1) * 1000 / (cv::getTickFrequency()) << " ms" << std::endl;
+	std::cout << "[predict result] : " << tmpM[0].first << std::endl << std::endl;
+
+	return tmpM[0].first;
 }
 
 void recognition3D::load_svmClassifier(svmTrainer::classifier classifier_, std::string file)
@@ -528,4 +557,120 @@ void recognition3D::load_svmClassifier(svmTrainer::classifier classifier_, std::
 	break;
 	}
 	
+}
+
+//计算转换矩阵
+float recognition3D::RotationTranslationCompute(
+	int targetIndex,
+	FeatureCloud& cloudsource,
+	Eigen::Matrix4f &tranResult)
+{
+	if (objectLibrary.empty())
+	{
+		std::cout << "Error: the objectLibrary is empty()" << std::endl;
+		return false;
+	}
+	if (targetIndex < 0 || targetIndex > 5)
+	{
+		std::cout << "Error: the targetIndex is wrong" << std::endl;
+		return false;
+	}
+	FeatureCloud cloudtarget = objectLibrary[targetIndex];
+	float resolution = pointProcess::computeResolution(cloudtarget.getKeypoints());
+	// Correspondence Estimation
+	pcl::Correspondences all_correspondences;//剔除前
+	pcl::Correspondences tuple_inliers;//tuple原则剔除后
+	pcl::Correspondences sac_inliers;//sac原则剔除后
+
+	pointProcess::correspondence_estimation(cloudsource.getFPFH_features(),
+		cloudtarget.getFPFH_features(),
+		all_correspondences);
+	std::cout << "correspondence_estimation size : " << all_correspondences.size() << std::endl;
+	//约束去除错误点对
+	float tupleScale = 0.9;
+	int tuple_max_cnt_ = 1500;
+	pointProcess::advancedMatching(cloudtarget.getKeypoints(), cloudsource.getKeypoints(),
+		all_correspondences, tuple_inliers, tupleScale, tuple_max_cnt_);
+	std::cout << "tuple_rejection size : " << tuple_inliers.size() << std::endl;
+
+	pointProcess::correspondences_rejection(cloudsource.getKeypoints(), 
+		cloudtarget.getKeypoints(),
+		tuple_inliers, sac_inliers,
+		60, resolution * 3);//0 1 为 50， 
+	std::cout << "sac_rejection size : " << sac_inliers.size() << std::endl;
+	if (false)
+	{
+		pointProcess::showPointCloudCorrespondences("all_correspondences", cloudtarget.getKeypoints(),
+			cloudsource.getKeypoints(), all_correspondences, 200);
+		pointProcess::showPointCloudCorrespondences("inliers", cloudtarget.getKeypoints(),
+			cloudsource.getKeypoints(), sac_inliers, 200);
+	}
+	//根据匹配点对重新确立关键点
+	FeatureCloud targetCloud_Keypoint, sourceCloud_Keypoint;
+	PointCloud::Ptr targetKeypoint_(new PointCloud);
+	PointCloud::Ptr sourceKeypoint_(new PointCloud);
+	Normals::Ptr targetKeypointNormal_(new Normals);
+	Normals::Ptr sourceKeypointNormal_(new Normals);
+	FPFH_features::Ptr targetKeypointFPFH_(new FPFH_features);
+	FPFH_features::Ptr sourceKeypointFPFH_(new FPFH_features);
+	
+	for (size_t i = 0; i < sac_inliers.size(); ++i)
+	{
+		PointT source = cloudsource.getKeypoints()->at(sac_inliers[i].index_query);
+		PointT target = cloudtarget.getKeypoints()->at(sac_inliers[i].index_match);
+
+		NormalT sourceNormal = cloudsource.getKeypointNormals()->at(sac_inliers[i].index_query);
+		NormalT targetNormal = cloudtarget.getKeypointNormals()->at(sac_inliers[i].index_match);
+
+		FPFH33_feature sourceFPFH = cloudsource.getFPFH_features()->at(sac_inliers[i].index_query);
+		FPFH33_feature targetFPFH = cloudtarget.getFPFH_features()->at(sac_inliers[i].index_match);
+
+		targetKeypoint_->points.push_back(target);
+		sourceKeypoint_->points.push_back(source);
+
+		targetKeypointNormal_->points.push_back(targetNormal);
+		sourceKeypointNormal_->points.push_back(sourceNormal);
+
+		targetKeypointFPFH_->points.push_back(targetFPFH);
+		sourceKeypointFPFH_->points.push_back(sourceFPFH);
+	}
+	targetCloud_Keypoint.setKeypoints(targetKeypoint_);
+	sourceCloud_Keypoint.setKeypoints(sourceKeypoint_);
+	targetCloud_Keypoint.setKeypointNormals(targetKeypointNormal_);
+	sourceCloud_Keypoint.setKeypointNormals(sourceKeypointNormal_);
+	targetCloud_Keypoint.setFPFH_features(targetKeypointFPFH_);
+	sourceCloud_Keypoint.setFPFH_features(sourceKeypointFPFH_);
+	//Construct PointNormal建立法向量点云
+	pointProcess::construct_PointNormal(cloudtarget, cloudsource);
+	pointProcess::construct_PointNormal(targetCloud_Keypoint, sourceCloud_Keypoint);
+
+	//PCL函数建立点云法向量
+	//PointCloudNormal::Ptr pointNormal_src(new PointCloudNormal);
+	//PointCloudNormal::Ptr pointNormal_tgt(new PointCloudNormal);
+	//pcl::concatenateFields(*targetKeypoint_, *targetKeypointNormal_, *pointNormal_tgt);
+	//pcl::concatenateFields(*sourceKeypoint_, *sourceKeypointNormal_, *pointNormal_src);
+	//targetCloud_Keypoint.setPointCloudNormals(pointNormal_tgt);
+	//sourceCloud_Keypoint.setPointCloudNormals(pointNormal_src);
+
+	Eigen::Matrix4f tran = Eigen::Matrix4f::Identity();
+
+	resolution = pointProcess::computeResolution(targetCloud_Keypoint.getKeypoints());
+	float minsampleDistance = resolution * 2;
+	int numofSample = sac_inliers.size() / 5;
+	int correspondenceRandomness = 30;
+	pointProcess::SAC_IA_Transform(sourceCloud_Keypoint, targetCloud_Keypoint, minsampleDistance,
+		numofSample, correspondenceRandomness, tran);
+
+	float transEps = 1e-10;//设置两次变化矩阵之间的差值（一般设置为1e-10即可）
+	float maxCorresDist = 0.7;//设置对应点对之间的最大距离（此值对配准结果影响较大）
+	float EuclFitEps = 0.0001;//设置收敛条件是均方误差和小于阈值,停止迭代；
+	float outlThresh = resolution * 2.5;
+	int maxIteration = 60;
+	float scoreICP = pointProcess::iterative_closest_points("SVD", false, false,
+		sourceCloud_Keypoint, targetCloud_Keypoint,
+		transEps, maxCorresDist, EuclFitEps,
+		outlThresh, maxIteration, tran);
+
+	tranResult = tran;
+	return scoreICP;
 }
